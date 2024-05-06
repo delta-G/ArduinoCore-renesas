@@ -34,6 +34,7 @@
 
 #include "r_sci_uart.h"
 #include "r_uart_api.h"
+#include "r_dmac.h"
 
 #include "SafeRingBuffer.h"
 
@@ -54,6 +55,7 @@ class UART : public arduino::HardwareSerial {
     static void WrapperCallback(uart_callback_args_t *p_args);
 
     UART(int _pin_tx, int _pin_rx, int pin_rts = -1, int pin_cts = -1);
+    void useDMA(int);
     void begin(unsigned long);
     void begin(unsigned long, uint16_t config);
     void end();
@@ -76,7 +78,7 @@ class UART : public arduino::HardwareSerial {
 
     int                       channel;
     arduino::SafeRingBufferN<SERIAL_BUFFER_SIZE> rxBuffer;
-    arduino::SafeRingBufferN<SERIAL_BUFFER_SIZE> txBuffer;
+    alignas(1024) arduino::SafeRingBufferN<SERIAL_BUFFER_SIZE> txBuffer;
 
     volatile bool tx_done = true;
     char txc;
@@ -85,13 +87,25 @@ class UART : public arduino::HardwareSerial {
     uart_cfg_t                uart_cfg;
     baud_setting_t            uart_baud;
     sci_uart_extended_cfg_t   uart_cfg_extend;
+    
+    dmac_instance_ctrl_t 	  dmac_ctrl;
+    transfer_cfg_t 			  dmac_cfg;
+    dmac_extended_cfg_t		  dmac_cfg_extend;
+    transfer_info_t 		  dmac_info;
+    transfer_instance_t       dmac_tx_transfer;
 
     uart_ctrl_t*              get_ctrl() { return &uart_ctrl; }
+    
+    int 					  dmaChannel = -1;
+    volatile size_t 		  lastLen;
+    
+    
     
     bool                      setUpUartIrqs(uart_cfg_t &cfg);
 
   protected:
     bool                      init_ok;
+    
 };
 
     
