@@ -31,6 +31,13 @@
 
 UART * UART::g_uarts[MAX_UARTS] = {nullptr};
 
+void dma_callback(dmac_callback_args_t * cb_data) 
+{	
+	dmac_instance_ctrl_t * p_dmac_ctrl = (dmac_instance_ctrl_t *)cb_data->p_context;
+	R_ICU->IELSR[((dmac_extended_cfg_t*)p_dmac_ctrl->p_cfg->p_extend)->irq] &= ~(R_ICU_IELSR_IR_Msk);	
+	p_dmac_ctrl->p_reg->DMSTS = 0;	
+}
+
 void uart_callback(uart_callback_args_t __attribute((unused)) *p_args)
 {
     /* This callback function is not used but it is referenced into 
@@ -60,14 +67,38 @@ void UART::WrapperCallback(uart_callback_args_t *p_args) {
       }
       case UART_EVENT_TX_COMPLETE:
       case UART_EVENT_TX_DATA_EMPTY:
-      {
-		  if(uart_ptr->txBuffer.available()){
-			  static char txc;
-			  txc = uart_ptr->txBuffer.read_char();
-			  R_SCI_UART_Write(&(uart_ptr->uart_ctrl), (uint8_t*)&txc , 1);
-		  } else {
-			  uart_ptr->tx_done = true;
-		  }
+      {    	  
+    	  if(uart_ptr->dmaChannel < 0){
+    		  // Not using DMA this gets called every character.  
+			  if(uart_ptr->txBuffer.available()){
+				  static char txc;
+				  txc = uart_ptr->txBuffer.read_char();
+				  R_SCI_UART_Write(&(uart_ptr->uart_ctrl), (uint8_t*)&txc , 1);
+			  } else {
+				  uart_ptr->tx_done = true;
+			  }
+    	  } else {
+    		  // Using DMA this only happens for TX_Complete
+    		  //  The TEI interrupt will be left on and will fire when 
+    		  //  the transmit shift register empties and nothing has been added to TDR.  
+    		  // consume however many characters we sent
+    		  	int sent = uart_ptr->lastLen;
+    		  	for(int i=0; i<sent; i++){
+    		  		char x = uart_ptr->txBuffer.read_char();
+    		  	}
+    		  	// If there are more char available then send them. 	
+    		  	int cnt = uart_ptr->txBuffer.available();
+    		  	if(cnt > 0){
+    		  		R_SCI_UART_Write(&(uart_ptr->uart_ctrl), uart_ptr->txBuffer._aucBuffer + uart_ptr->txBuffer._iTail, cnt); 
+    				uart_ptr->uart_ctrl.p_reg->SCR |= (R_SCI0_SCR_TEIE_Msk);  // Turn TEIE interrupt back on since TEI isn't running and that's where HAL turns it on. 
+    		  		uart_ptr->lastLen = cnt;
+    		  	}
+    		  	else {
+    		  		// If count is 0 then the buffer is empty and there's nothing left to do.  
+    		  		uart_ptr->tx_done = true;
+    		  		uart_ptr->lastLen = 0;
+    		  	}
+    	  }
         break;
       }
       case UART_EVENT_RX_CHAR:
@@ -106,37 +137,54 @@ bool UART::setUpUartIrqs(uart_cfg_t &cfg) {
 
   rv = IRQManager::getInstance().addPeripheral(IRQ_SCI_UART,&cfg);
   
+  if(dmaChannel >= 0){
+	  // If DMA is being used, setup the DMA interrupt and turn off the TXI interrupt. 
+	  if (rv) {
+		  rv = IRQManager::getInstance().addDMA(dmac_cfg_extend);
+	  }  
+	  if (rv) {
+		  R_ICU->IELSR[uart_cfg.txi_irq] = 0;
+	  }
+  }
   return rv;
 } 
 
 /* -------------------------------------------------------------------------- */
 size_t UART::write(uint8_t c) {
 /* -------------------------------------------------------------------------- */  
-	if(init_ok) {
-		while(txBuffer.isFull()){;}
-		txBuffer.store_char(c);
-		if(tx_done){
-			tx_done = false;
-			txc = txBuffer.read_char();  // clear out the char we just added and send it to start transmission. 
-			R_SCI_UART_Write(&uart_ctrl, (uint8_t*)&txc , 1);		
-		} 
-		return 1;
-	}
-	else {
-		return 0;
-	}
+  if(init_ok) {
+    while(txBuffer.isFull()){;}
+    txBuffer.store_char(c);
+    if(tx_done){
+    	tx_done = false;
+    	if(dmaChannel < 0){
+    		txc = txBuffer.read_char();  // clear out the char we just added. 
+			R_SCI_UART_Write(&uart_ctrl, (uint8_t*)&txc , 1);
+    	} else {
+    		lastLen = 1;
+			R_SCI_UART_Write(&uart_ctrl, txBuffer._aucBuffer + txBuffer._iTail, 1);  // The DMAC already knows where the pointer is. 
+			uart_ctrl.p_reg->SCR |= (R_SCI0_SCR_TEIE_Msk);  // Turn TEIE interrupt back on since TEI isn't running and that's where HAL turns it on. 
+    	}
+    } 
+    return 1;
+  }
+  else {
+    return 0;
+  }
 }
 
+/* -------------------------------------------------------------------------- */
 size_t  UART::write(uint8_t* c, size_t len) {
-	if(init_ok) {
-		for(int i = 0; i<len; i++){
+/* -------------------------------------------------------------------------- */
+  if(init_ok) {
+	  for(int i = 0; i<len; i++){
 		  write(c[i]);
-		}
-		return len;
-    }
-    else {
-    	return 0;
-    }
+	  }
+    return len;
+  }
+  else {
+    return 0;
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -199,6 +247,13 @@ done:
   return true;
 }
 
+
+/* -------------------------------------------------------------------------- */
+void UART::useDMA(int ch) {
+/* -------------------------------------------------------------------------- */  
+	dmaChannel = ch;
+}
+
 /* -------------------------------------------------------------------------- */
 void UART::begin(unsigned long baudrate, uint16_t config) {
 /* -------------------------------------------------------------------------- */  
@@ -234,7 +289,44 @@ void UART::begin(unsigned long baudrate, uint16_t config) {
     uart_cfg.channel                              = channel; 
     uart_cfg.p_context                            = NULL;
     uart_cfg.p_extend                             = &uart_cfg_extend;
-    uart_cfg.p_transfer_tx                        = NULL;
+    if(dmaChannel >= 0){    
+
+        dmac_info.transfer_settings_word_b.dest_addr_mode 	= TRANSFER_ADDR_MODE_FIXED;
+        dmac_info.transfer_settings_word_b.repeat_area 		= TRANSFER_REPEAT_AREA_SOURCE;
+        dmac_info.transfer_settings_word_b.irq 				= TRANSFER_IRQ_END;
+        dmac_info.transfer_settings_word_b.src_addr_mode 	= TRANSFER_ADDR_MODE_INCREMENTED;
+        dmac_info.transfer_settings_word_b.size 			= TRANSFER_SIZE_1_BYTE;
+        dmac_info.transfer_settings_word_b.mode 			= TRANSFER_MODE_NORMAL;
+
+        dmac_info.p_src 									= txBuffer._aucBuffer;
+    //    dmac_info.p_dest = //   Set by r_sci_uart_transfer_open in R_SCI_UART_Open
+
+        dmac_info.length 									= 5;   
+        
+        dmac_cfg_extend.channel 							= dmaChannel;
+        dmac_cfg_extend.irq 								= FSP_INVALID_VECTOR;
+        dmac_cfg_extend.offset 								= 0;
+        dmac_cfg_extend.src_buffer_size 					= 64;
+        dmac_cfg_extend.activation_source 					= ELC_EVENT_SCI2_TXI;
+        dmac_cfg_extend.p_callback 							= dma_callback;
+        dmac_cfg_extend.p_context                           = &dmac_ctrl;
+        
+
+        dmac_cfg.p_info 									= &dmac_info;
+        dmac_cfg.p_extend 									= &dmac_cfg_extend;
+        
+        
+        
+        dmac_tx_transfer.p_ctrl = &dmac_ctrl;
+        dmac_tx_transfer.p_cfg = &dmac_cfg;
+        dmac_tx_transfer.p_api = &g_transfer_on_dmac;
+        
+        uart_cfg.p_transfer_tx                        = &dmac_tx_transfer;
+        
+    }
+    else {
+    	uart_cfg.p_transfer_tx                        = NULL;
+    }
     uart_cfg.p_transfer_rx                        = NULL;
   
     switch(config){
@@ -290,6 +382,10 @@ void UART::begin(unsigned long baudrate, uint16_t config) {
   if(err != FSP_SUCCESS) while(1);
   err = R_SCI_UART_BaudSet(&uart_ctrl, (void *) &uart_baud);
   if(err != FSP_SUCCESS) while(1);
+  
+  if(dmaChannel >= 0){
+	  dmac_ctrl.p_reg->DMAMD |= (9ul << 8);  // Set extended repeat to match 512 byte txBuffer size.  
+  }
 
   rxBuffer.clear();
   txBuffer.clear();
@@ -338,3 +434,4 @@ size_t UART::write_raw(uint8_t* c, size_t len) {
 /* -------------------------------------------------------------------------- */
   return write(c, len);
 }
+
