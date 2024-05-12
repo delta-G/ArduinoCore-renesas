@@ -2,6 +2,7 @@
 #define ARDUINO_FSP_TRANSFERT_H
 
 #include "r_dmac.h"
+#include "IRQManager.h"
 
 /* Wrapper class for DMA */
 
