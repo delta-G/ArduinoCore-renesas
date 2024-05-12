@@ -42,6 +42,7 @@ class FspDma {
 
     bool set_activation_source(elc_event_t ev) {
         extend_cfg.activation_source = ev;
+        return true;
     } 
 
     bool setup_irq(DmaCallback_f fnc, uint8_t priority = 12, void *ctx = nullptr) {
