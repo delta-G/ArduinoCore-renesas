@@ -161,6 +161,7 @@ static const uint8_t SS  =  PIN_SPI_CS;
 /****** SDCARD CORE DEFINES *******/
 #define SDCARD_HOWMANY     1
 
+#define I2S_HOWMANY        1
 
 #define EXT_INTERRUPTS_HOWMANY 8
 
@@ -209,3 +210,6 @@ static const uint8_t SS  =  PIN_SPI_CS;
 #define RTC_CLOCK_SOURCE    RTC_CLOCK_SOURCE_SUBCLK
 
 #define AR_INTERNAL_VOLTAGE     1.18f
+
+#define ETHERNET_AGT_TIMER_CHANNEL      3
+#define ETHERNET_CLK_PIN                BSP_IO_PORT_06_PIN_00

@@ -169,7 +169,7 @@ public:
     void off(size_t pin) {
         turnLed(pin, false);
     }
-    bool begin() {
+    int begin() {
         bool rv = true;
         uint8_t type;
         int8_t ch = FspTimer::get_available_timer(type);
@@ -252,6 +252,19 @@ public:
     void setCallback(voidFuncPtr callBack){
         _callBack = callBack;
     }
+
+    void clear() {
+        const uint32_t fullOff[] = {
+        	0x00000000,
+        	0x00000000,
+        	0x00000000
+        };
+        loadFrame(fullOff);
+#ifdef MATRIX_WITH_ARDUINOGRAPHICS
+        memset(_canvasBuffer, 0, sizeof(_canvasBuffer));
+#endif
+    }
+
 
 #ifdef MATRIX_WITH_ARDUINOGRAPHICS
     virtual void set(int x, int y, uint8_t r, uint8_t g, uint8_t b) {

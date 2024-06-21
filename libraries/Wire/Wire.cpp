@@ -30,8 +30,8 @@ extern "C" {
 
 #include "Wire.h"
 
-TwoWire *TwoWire::g_SCIWires[TWOWIRE_MAX_I2C_CHANNELS] = {nullptr};
-TwoWire *TwoWire::g_I2CWires[TWOWIRE_MAX_SCI_CHANNELS] = {nullptr};
+TwoWire *TwoWire::g_SCIWires[TWOWIRE_MAX_SCI_CHANNELS] = {nullptr};
+TwoWire *TwoWire::g_I2CWires[TWOWIRE_MAX_I2C_CHANNELS] = {nullptr};
 
 /* -------------------------------------------------------------------------- */
 void TwoWire::setBusStatus(WireStatus_t ws) {
@@ -437,25 +437,28 @@ void TwoWire::end(void) {
   if(init_ok) {
     if(is_master) {
       if(m_close != nullptr) {
-        m_close(&m_i2c_ctrl);
         R_BSP_IrqDisable (m_i2c_cfg.txi_irq);
         R_BSP_IrqDisable (m_i2c_cfg.rxi_irq);
         R_BSP_IrqDisable (m_i2c_cfg.tei_irq);
         R_BSP_IrqDisable (m_i2c_cfg.eri_irq);
-          
+        m_close(&m_i2c_ctrl);  
       }
     }
     else {
       if(s_close != nullptr) {
-        s_close(&s_i2c_ctrl);
         R_BSP_IrqDisable (s_i2c_cfg.txi_irq);
         R_BSP_IrqDisable (s_i2c_cfg.rxi_irq);
         R_BSP_IrqDisable (s_i2c_cfg.tei_irq);
         R_BSP_IrqDisable (s_i2c_cfg.eri_irq);
+        s_close(&s_i2c_ctrl);
         
       }
     }
   }
+  /* fix for slave that create a sort of lock on the I2C bus when end is called and the master
+     is not more able to get the I2C buse working */
+  R_IOPORT_PinCfg(NULL, g_pin_cfg[sda_pin].pin, IOPORT_CFG_PORT_DIRECTION_INPUT | IOPORT_CFG_PULLUP_ENABLE);
+  R_IOPORT_PinCfg(NULL, g_pin_cfg[scl_pin].pin, IOPORT_CFG_PORT_DIRECTION_INPUT | IOPORT_CFG_PULLUP_ENABLE);
   init_ok = false;
 }
 
@@ -485,10 +488,6 @@ uint8_t TwoWire::read_from(uint8_t address, uint8_t* data, uint8_t length, unsig
 
   if(bus_status == WIRE_STATUS_RX_COMPLETED) {
     return length;
-  }
-
-  if(bus_status == WIRE_STATUS_UNSET) {
-    m_abort(&m_i2c_ctrl);
   }
   
   return 0; /* ???????? return value ??????? */
@@ -522,7 +521,6 @@ uint8_t TwoWire::write_to(uint8_t address, uint8_t* data, uint8_t length, unsign
     }
     else if(bus_status == WIRE_STATUS_UNSET) {
       rv = END_TX_TIMEOUT;
-      m_abort(&m_i2c_ctrl);
     }
     /* as far as I know is impossible to distinguish between NACK on ADDRESS and
       NACK on DATA */
