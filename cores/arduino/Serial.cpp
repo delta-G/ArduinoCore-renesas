@@ -62,8 +62,11 @@ void UART::WrapperCallback(uart_callback_args_t *p_args) {
       case UART_EVENT_TX_DATA_EMPTY:
       {
           if(uart_ptr->txBuffer.available()){
-              uart_ptr->txc = uart_ptr->txBuffer.read_char();
-              R_SCI_UART_Write(&(uart_ptr->uart_ctrl), (uint8_t*)&(uart_ptr->txc) , 1);
+              int idx = 0;
+              while (uart_ptr->txBuffer.available() && (idx < 16)){
+                uart_ptr->txc[idx++] = uart_ptr->txBuffer.read_char();
+              }
+              R_SCI_UART_Write(&(uart_ptr->uart_ctrl), (uint8_t*)(uart_ptr->txc) , idx);
           } else {
         	  uart_ptr->tx_done = true;
           }
@@ -116,8 +119,8 @@ size_t UART::write(uint8_t c) {
 	  txBuffer.store_char(c);
 	  if(tx_done){
 		  tx_done = false;
-		  txc = txBuffer.read_char();  // clear out the char we just added and send it to start transmission.
-		  R_SCI_UART_Write(&uart_ctrl, (uint8_t*)&txc , 1);
+		  txc[0] = txBuffer.read_char();  // clear out the char we just added and send it to start transmission.
+		  R_SCI_UART_Write(&uart_ctrl, (uint8_t*)txc , 1);
 	  }
 	  return 1;
   }
