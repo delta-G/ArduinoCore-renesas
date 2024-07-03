@@ -58,15 +58,8 @@ void UART::WrapperCallback(uart_callback_args_t *p_args) {
       {
           break;
       }
-      case UART_EVENT_TX_COMPLETE:
+      case UART_EVENT_TX_COMPLETE:  // TEI interrupt
       {
-        uart_ptr->tx_done = true;    
-        break;
-      }
-      case UART_EVENT_TX_DATA_EMPTY:
-      {
-          
-          R_IOPORT_PinWrite(NULL, BSP_IO_PORT_03_PIN_04, BSP_IO_LEVEL_HIGH);
           if(uart_ptr->txBuffer.available()){
               int idx = 0;
               while (uart_ptr->txBuffer.available() && (idx < 16)){
@@ -74,10 +67,13 @@ void UART::WrapperCallback(uart_callback_args_t *p_args) {
               }
               R_SCI_UART_Write(&(uart_ptr->uart_ctrl), (uint8_t*)(uart_ptr->txc) , idx);
           } 
-          // else {
-        	//   uart_ptr->tx_done = true;
-          // }
-          R_IOPORT_PinWrite(NULL, BSP_IO_PORT_03_PIN_04, BSP_IO_LEVEL_LOW);
+          else {
+        	  uart_ptr->tx_done = true;
+          } 
+        break;
+      }
+      case UART_EVENT_TX_DATA_EMPTY: // TXI interrupt had no more data to write
+      {          
         break;
       }
       case UART_EVENT_RX_CHAR:
@@ -124,14 +120,13 @@ size_t UART::write(uint8_t c) {
 /* -------------------------------------------------------------------------- */  
   if(init_ok) {
 	  while(txBuffer.isFull()){;}
-	  txBuffer.store_char(c);
-	  if(tx_done){
-        R_IOPORT_PinWrite(NULL, BSP_IO_PORT_01_PIN_07, BSP_IO_LEVEL_HIGH);
-		  tx_done = false;
-		  txc[0] = txBuffer.read_char();  // clear out the char we just added and send it to start transmission.
-		  R_SCI_UART_Write(&uart_ctrl, (uint8_t*)txc , 1);
-        R_IOPORT_PinWrite(NULL, BSP_IO_PORT_01_PIN_07, BSP_IO_LEVEL_LOW);
-	  }
+    if (tx_done) {
+      tx_done = false;
+      txc[0] = c;
+      R_SCI_UART_Write(&uart_ctrl, (uint8_t*)txc , 1);
+    } else {
+      txBuffer.store_char(c);
+    }
 	  return 1;
   }
   else {
